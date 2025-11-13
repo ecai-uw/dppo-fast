@@ -33,7 +33,6 @@ class DiffusionEval(DiffusionModel):
         checkpoint = torch.load(
             network_path, map_location=self.device, weights_only=True
         )  # 'network.mlp_mean...', 'actor.mlp_mean...', 'actor_ft.mlp_mean...'
-
         # Set up base model --- techncally not needed if all denoising steps are fine-tuned
         self.actor = self.network
         # import pdb;pdb.set_trace()
