@@ -29,6 +29,8 @@ class RobomimicLowdimWrapper(gym.Env):
 		init_state=None,
 		render_hw=(256, 256),
 		render_camera_name="agentview",
+		impedance_mode="fixed",
+		controller_configs=None,
 	):
 		self.env = env
 		self.init_state = init_state
@@ -36,6 +38,14 @@ class RobomimicLowdimWrapper(gym.Env):
 		self.render_camera_name = render_camera_name
 		self.video_writer = None
 		self.clamp_obs = clamp_obs
+
+		# Setting up controller config parameters.
+		self.impedance_mode = impedance_mode
+		self.controller_configs = controller_configs
+		self.default_damping = self.controller_configs["damping"]
+		self.default_stiffness = self.controller_configs["kp"]
+		self.damping_exp_scale = self.controller_configs["damping_limits"][1] / self.default_damping
+		self.stiffness_exp_scale = self.controller_configs["kp_limits"][1] / self.default_stiffness
 
 		# set up normalization
 		self.normalize = normalization_path is not None
@@ -124,10 +134,33 @@ class RobomimicLowdimWrapper(gym.Env):
 		return self.get_observation(raw_obs)
 
 	def step(self, action):
-		if self.normalize:
-			action = self.unnormalize_action(action)
-		raw_obs, reward, done, info = self.env.step(action)
+		# Parse action based on impedance mode - updating control parameters is handled later.
+		if self.impedance_mode == "variable":
+			damping, kp, delta = action[:6], action[6:12], action[12:]
+			# Un-normalizing/scaling damping and kp actions.
+			damping = np.power(self.damping_exp_scale, damping) * self.default_damping
+			kp = np.power(self.stiffness_exp_scale, kp) * self.default_stiffness
+		elif self.impedance_mode == "variable_kp":
+			kp, delta = action[:6], action[6:]
+			# Un-normalizing/scaling kp action.
+			kp = np.power(self.stiffness_exp_scale, kp) * self.default_st
+		else:
+			delta = action
 
+		# Un-normalizing operational space action (delta), if necessary.
+		if self.normalize:
+			delta = self.unnormalize_action(delta)
+
+		# Re-combining full action based on impedance mode.
+		if self.impedance_mode == "variable":
+			raw_action = np.concatenate([damping, kp, delta], axis=0)
+		elif self.impedance_mode == "variable_kp":
+			raw_action = np.concatenate([kp, delta], axis=0)
+		else:
+			raw_action = delta
+		
+		# Stepping environment.
+		raw_obs, reward, done, info = self.env.step(raw_action)
 		obs = self.get_observation(raw_obs)
 
 		# render if specified
