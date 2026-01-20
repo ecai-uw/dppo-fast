@@ -143,7 +143,7 @@ class RobomimicLowdimWrapper(gym.Env):
 		elif self.impedance_mode == "variable_kp":
 			kp, delta = action[:6], action[6:]
 			# Un-normalizing/scaling kp action.
-			kp = np.power(self.stiffness_exp_scale, kp) * self.default_st
+			kp = np.power(self.stiffness_exp_scale, kp) * self.default_stiffness
 		else:
 			delta = action
 
@@ -162,6 +162,19 @@ class RobomimicLowdimWrapper(gym.Env):
 		# Stepping environment.
 		raw_obs, reward, done, info = self.env.step(raw_action)
 		obs = self.get_observation(raw_obs)
+
+		# Adding delta, damping, and stiffness to info dict.
+		info["delta"] = delta
+		if self.impedance_mode == "variable":
+			info["damping"] = damping
+			info["stiffness"] = kp
+		elif self.impedance_mode == "variable_kp":
+			info["damping"] = np.array([self.default_damping] * 6)
+			info["stiffness"] = kp
+		else:
+			info["damping"] = np.array([self.default_damping] * 6)
+			info["stiffness"] = np.array([self.default_stiffness] * 6)
+		# TODO: handle impedance modes properly
 
 		# render if specified
 		if self.video_writer is not None:
