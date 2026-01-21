@@ -30,6 +30,7 @@ class RobomimicLowdimWrapper(gym.Env):
 		render_hw=(256, 256),
 		render_camera_name="agentview",
 		impedance_mode="fixed",
+		control_obs=False,
 		controller_configs=None,
 	):
 		self.env = env
@@ -41,6 +42,7 @@ class RobomimicLowdimWrapper(gym.Env):
 
 		# Setting up controller config parameters.
 		self.impedance_mode = impedance_mode
+		self.control_obs = control_obs
 		self.controller_configs = controller_configs
 		self.default_damping = self.controller_configs["damping"]
 		self.default_stiffness = self.controller_configs["kp"]
@@ -71,6 +73,9 @@ class RobomimicLowdimWrapper(gym.Env):
 		obs_example = np.concatenate(
 			[obs_example_full[key] for key in self.obs_keys], axis=0
 		)
+		if self.control_obs:
+			# Add two more entries for damping and kp.
+			obs_example = np.concatenate([obs_example, np.zeros(2)], axis=0)
 		low = np.full_like(obs_example, fill_value=-1)
 		high = np.full_like(obs_example, fill_value=1)
 		self.observation_space["state"] = spaces.Box(
@@ -97,6 +102,19 @@ class RobomimicLowdimWrapper(gym.Env):
 		obs = {"state": np.concatenate([raw_obs[key] for key in self.obs_keys], axis=0)}
 		if self.normalize:
 			obs["state"] = self.normalize_obs(obs["state"])
+		
+		# Include controller state in observation if specified.
+		if self.control_obs:
+			# Grab kp and kd directory from environment - assume all joints have the same gains for now.
+			kp = self.env.env.robots[0].controller.kp[0:1]
+			kd = self.env.env.robots[0].controller.kd[0:1]
+
+			damping = kd / ( 2 * np.sqrt(kp) )  # Damping ratio formula.
+
+			# Exponential normalization.
+			kp_obs = np.log(kp / self.default_stiffness) / np.log(self.stiffness_exp_scale)
+			damping_obs = np.log(damping / self.default_damping) / np.log(self.damping_exp_scale)
+			obs["state"] = np.concatenate([obs["state"], damping_obs, kp_obs], axis=0)
 		return obs
 
 	def seed(self, seed=None):
