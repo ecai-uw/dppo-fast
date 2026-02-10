@@ -182,17 +182,18 @@ class RobomimicLowdimWrapper(gym.Env):
 		obs = self.get_observation(raw_obs)
 
 		# Adding delta, damping, and stiffness to info dict.
-		info["delta"] = delta
-		if self.impedance_mode == "variable":
-			info["damping"] = damping
-			info["stiffness"] = kp
-		elif self.impedance_mode == "variable_kp":
-			info["damping"] = np.array([self.default_damping] * 6)
-			info["stiffness"] = kp
-		else:
-			info["damping"] = np.array([self.default_damping] * 6)
-			info["stiffness"] = np.array([self.default_stiffness] * 6)
-		# TODO: handle impedance modes properly
+		info["delta"] = delta # TODO: don't actually need this? already in action?
+		# Grabbing current damping and stiffness from the controller.
+		controller_kp = self.env.env.robots[0].controller.kp
+		controller_kd = self.env.env.robots[0].controller.kd
+		# damping = kd / ( 2 * np.sqrt(kp) )  # Damping ratio formula.
+		info["damping"] = controller_kd / ( 2 * np.sqrt(controller_kp) )
+		info["stiffness"] = controller_kp
+
+		# Adding ee forces to info dict.
+		force, torque = self.get_ee_forces()
+		info["ee_force"] = force
+		info["ee_torque"] = torque
 
 		# render if specified
 		if self.video_writer is not None:
@@ -209,3 +210,14 @@ class RobomimicLowdimWrapper(gym.Env):
 			width=w,
 			camera_name=self.render_camera_name,
 		)
+
+	def get_gripper_gains(self):
+		# NOTE: This assumes that gripper actuators are the last two, and that they are PD actuators.s
+		gripper_kp = self.env.env.sim.model.actuator_gainprm[-2:, 0]
+		gripper_kv = self.env.env.sim.model.actuator_biasprm
+		return gripper_kp, gripper_kv
+	
+	def get_ee_forces(self):
+		force = self.env.env.robots[0].ee_force
+		torque = self.env.env.robots[0].ee_torque
+		return force, torque
