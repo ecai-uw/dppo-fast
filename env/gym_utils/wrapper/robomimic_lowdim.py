@@ -73,8 +73,8 @@ class RobomimicLowdimWrapper(gym.Env):
 		obs_example = np.concatenate(
 			[obs_example_full[key] for key in self.obs_keys], axis=0
 		)
+		# Add two more entries for damping and kp, if needed.
 		if self.control_obs:
-			# Add two more entries for damping and kp.
 			obs_example = np.concatenate([obs_example, np.zeros(2)], axis=0)
 		low = np.full_like(obs_example, fill_value=-1)
 		high = np.full_like(obs_example, fill_value=1)
@@ -105,7 +105,7 @@ class RobomimicLowdimWrapper(gym.Env):
 		
 		# Include controller state in observation if specified.
 		if self.control_obs:
-			# Grab kp and kd directory from environment - assume all joints have the same gains for now.
+			# Grab kp and kd directly from environment - assume all joints have the same gains for now.
 			kp = self.env.env.robots[0].controller.kp[0:1]
 			kd = self.env.env.robots[0].controller.kd[0:1]
 
@@ -152,7 +152,7 @@ class RobomimicLowdimWrapper(gym.Env):
 		return self.get_observation(raw_obs)
 
 	def step(self, action):
-		# Parse action based on impedance mode - updating control parameters is handled later.
+		# Parse action based on impedance mode.
 		if self.impedance_mode == "variable":
 			damping, kp, delta = action[:6], action[6:12], action[12:]
 			# Un-normalizing/scaling damping and kp actions.

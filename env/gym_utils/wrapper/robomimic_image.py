@@ -32,6 +32,9 @@ class RobomimicImageWrapper(gym.Env):
         init_state=None,
         render_hw=(256, 256),
         render_camera_name="agentview",
+        impedance_mode="fixed",
+        control_obs=False,
+        controller_configs=None,
     ):
         self.env = env
         self.init_state = init_state
@@ -40,6 +43,15 @@ class RobomimicImageWrapper(gym.Env):
         self.render_camera_name = render_camera_name
         self.video_writer = None
         self.clamp_obs = clamp_obs
+
+        # Setting up controller config parameters.
+        self.impedance_mode = impedance_mode
+        self.control_obs = control_obs
+        self.controller_configs = controller_configs
+        self.default_damping = self.controller_configs["damping"]
+        self.default_stiffness = self.controller_configs["kp"]
+        self.damping_exp_scale = self.controller_configs["damping_limits"][1] / self.default_damping
+        self.stiffness_exp_scale = self.controller_configs["kp_limits"][1] / self.default_stiffness
 
         # set up normalization
         self.normalize = normalization_path is not None
@@ -71,6 +83,10 @@ class RobomimicImageWrapper(gym.Env):
                 min_value, max_value = -1, 1
             else:
                 raise RuntimeError(f"Unsupported type {key}")
+            
+            # Add two more entries for damping and kp, if needed - only for state obs.
+            if self.control_obs and key.endswith("state"):
+                shape += (2,)
             this_space = spaces.Box(
                 low=min_value,
                 high=max_value,
@@ -110,6 +126,18 @@ class RobomimicImageWrapper(gym.Env):
         if self.normalize:
             obs["state"] = self.normalize_obs(obs["state"])
         obs["rgb"] *= 255  # [0, 1] -> [0, 255], in float64
+
+        # Include controller state in observation if specified.
+        if self.control_obs:
+            # Grab kp and kd directly from environment - assume all joints have the same gains for now.
+            kp = self.env.env.robots[0].controller.kp[0:1]
+            kd = self.env.env.robots[0].controller.kd[0:1]
+
+            damping = kd / (2 * np.sqrt(kp) ) # Damping ratio formula.
+
+            # Exponential normalization.
+            kp_obs = np.log(kp / self.default_stiffness) / np.log(self.stiffness_exp_scale)
+            damping_obs = np.log(damping / self.default_damping) / np.log(self.damping_exp_scale)
         return obs
 
     def seed(self, seed=None):
@@ -150,10 +178,47 @@ class RobomimicImageWrapper(gym.Env):
         return self.get_observation(raw_obs)
 
     def step(self, action):
+        # Parse action based on impedance mode.
+        if self.impedance_mode == "variable":
+            damping, kp, delta = action[:6], action[6:12], action[12:]
+            # Un-normalizing/scaling damping and kp actions.
+            damping = np.power(self.damping_exp_scale, damping) * self.default_damping
+            kp = np.power(self.stiffness_exp_scale, kp) * self.default_stiffness
+        elif self.impedance_mode == "variable_kp":
+            kp, delta = action[:6], action[6:]
+            # Un-normalizing/scaling kp action.
+            kp = np.power(self.stiffness_exp_scale, kp) * self.default_stiffness
+        else:
+            delta = action
+
+        # Un-normalizing operational space action (delta), if necessary.
         if self.normalize:
-            action = self.unnormalize_action(action)
+            delta = self.unnormalize_action(delta)
+
+        # Re-combining full action based on impedance mode.
+        if self.impedance_mode == "variable":
+            action = np.concatenate([damping, kp, delta], axis=0)
+        elif self.impedance_mode == "variable_kp":
+            action = np.concatenate([kp, delta], axis=0)
+        else:
+            action = delta
+
+        # Stepping environment.
         raw_obs, reward, done, info = self.env.step(action)
         obs = self.get_observation(raw_obs)
+
+        # Adding delta, damping, and stiffness to info dict.
+        info["delta"] = delta # TODO: don't actually need this? already in action?
+        # Grabbing current damping and stiffness from the controller.
+        controller_kp = self.env.env.robots[0].controller.kp
+        controller_kd = self.env.env.robots[0].controller.kd
+        info["damping"] = controller_kd / (2 * np.sqrt(controller_kp) )
+        info["stiffness"] = controller_kp
+
+        # Adding ee forces to info dict.
+        force, torque = self.get_ee_forces()
+        info["ee_force"] = force
+        info["ee_torque"] = torque
 
         # render if specified
         if self.video_writer is not None:
@@ -170,6 +235,11 @@ class RobomimicImageWrapper(gym.Env):
             width=w,
             camera_name=self.render_camera_name,
         )
+
+    def get_ee_forces(self):
+        force = self.env.env.robots[0].ee_force
+        torque = self.env.env.robots[0].ee_torque
+        return force, torque
 
 
 if __name__ == "__main__":
