@@ -78,20 +78,22 @@ class RobomimicImageWrapper(gym.Env):
         for key, value in shape_meta["obs"].items():
             shape = value["shape"]
             if key.endswith("rgb"):
-                min_value, max_value = 0, 1
+                min_value, max_value = 0, 255 # rgb not normalized until later
+                d_type = np.uint8
             elif key.endswith("state"):
                 min_value, max_value = -1, 1
+                d_type = np.float32
             else:
                 raise RuntimeError(f"Unsupported type {key}")
             
             # Add two more entries for damping and kp, if needed - only for state obs.
             if self.control_obs and key.endswith("state"):
-                shape += (2,)
+                shape = [s + 2 for s in shape]  # add two dimensions for damping and kp
             this_space = spaces.Box(
                 low=min_value,
                 high=max_value,
                 shape=shape,
-                dtype=np.float32,
+                dtype=d_type,
             )
             observation_space[key] = this_space
         self.observation_space = observation_space
@@ -138,6 +140,7 @@ class RobomimicImageWrapper(gym.Env):
             # Exponential normalization.
             kp_obs = np.log(kp / self.default_stiffness) / np.log(self.stiffness_exp_scale)
             damping_obs = np.log(damping / self.default_damping) / np.log(self.damping_exp_scale)
+            obs["state"] = np.concatenate([obs["state"], damping_obs, kp_obs], axis=-1)
         return obs
 
     def seed(self, seed=None):
