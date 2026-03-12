@@ -35,9 +35,7 @@ class DiffusionEval(DiffusionModel):
         )  # 'network.mlp_mean...', 'actor.mlp_mean...', 'actor_ft.mlp_mean...'
         # Set up base model --- techncally not needed if all denoising steps are fine-tuned
         self.actor = self.network
-        # import pdb;pdb.set_trace()
         try:
-        # if True:
             base_weights = {
                 key.split("actor.")[1]: checkpoint["model"][key]
                 for key in checkpoint["model"]
@@ -51,8 +49,8 @@ class DiffusionEval(DiffusionModel):
             )
             # load ema weights to match DPPO finetune weights
             base_weights = {
-                key.split("network.")[1]: checkpoint["ema"][key]
-                for key in checkpoint["ema"]
+                key.split("network.")[1]: checkpoint["model"][key]
+                for key in checkpoint["model"]
                 if "network." in key
             }
             use_ft = False
@@ -82,6 +80,18 @@ class DiffusionEval(DiffusionModel):
         deterministic=False,
     ):
         noise = self.actor(x, t, cond=cond)
+        if self.use_ddim:
+            ft_indices = torch.where(
+                index >= (self.ddim_steps - self.ft_denoising_steps)
+            )[0]
+        else:
+            ft_indices = torch.where(t < self.ft_denoising_steps)[0]
+
+        # overwrite noise for fine-tuning steps
+        if len(ft_indices) > 0:
+            cond_ft = {key: cond[key][ft_indices] for key in cond}
+            noise_ft = self.actor_ft(x[ft_indices], t[ft_indices], cond=cond_ft)
+            noise[ft_indices] = noise_ft
 
         # Predict x_0
         if self.predict_epsilon:
