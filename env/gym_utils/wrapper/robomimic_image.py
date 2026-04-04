@@ -28,6 +28,7 @@ class RobomimicImageWrapper(gym.Env):
             "agentview_image",
             "robot0_eye_in_hand_image",
         ],
+        depth_keys=None,
         clamp_obs=False,
         init_state=None,
         render_hw=(256, 256),
@@ -73,7 +74,10 @@ class RobomimicImageWrapper(gym.Env):
         )
         self.low_dim_keys = low_dim_keys
         self.image_keys = image_keys
+        self.depth_keys = depth_keys
         self.obs_keys = low_dim_keys + image_keys
+        if depth_keys is not None:
+            self.obs_keys += depth_keys
         observation_space = spaces.Dict()
         for key, value in shape_meta["obs"].items():
             shape = value["shape"]
@@ -83,6 +87,9 @@ class RobomimicImageWrapper(gym.Env):
             elif key.endswith("state"):
                 min_value, max_value = -1, 1
                 d_type = np.float32
+            elif key.endswith("depth"):
+                min_value, max_value = 0, 255 # depth not normalized until later, for consistency with rgb
+                d_type = np.uint8
             else:
                 raise RuntimeError(f"Unsupported type {key}")
             
@@ -112,6 +119,8 @@ class RobomimicImageWrapper(gym.Env):
 
     def get_observation(self, raw_obs):
         obs = {"rgb": None, "state": None}  # stack rgb if multiple cameras
+        if self.depth_keys is not None:
+            obs["depth"] = None # stack depth if multiple cameras
         for key in self.obs_keys:
             if key in self.image_keys:
                 if obs["rgb"] is None:
@@ -119,6 +128,13 @@ class RobomimicImageWrapper(gym.Env):
                 else:
                     obs["rgb"] = np.concatenate(
                         [obs["rgb"], raw_obs[key]], axis=0
+                    )  # C H W
+            elif self.depth_keys is not None and key in self.depth_keys:
+                if obs["depth"] is None:
+                    obs["depth"] = raw_obs[key]
+                else:
+                    obs["depth"] = np.concatenate(
+                        [obs["depth"], raw_obs[key]], axis=-1 # depth channel is last, not first
                     )  # C H W
             else:
                 if obs["state"] is None:
@@ -128,6 +144,9 @@ class RobomimicImageWrapper(gym.Env):
         if self.normalize:
             obs["state"] = self.normalize_obs(obs["state"])
         obs["rgb"] *= 255  # [0, 1] -> [0, 255], in float64
+        if self.depth_keys is not None:
+            obs["depth"] *= 255  # [0, 1] -> [0, 255], in float32
+            obs["depth"] = np.transpose(obs["depth"], (2, 0, 1))  # moving depth channel to the front for consistency with rgb
 
         # Include controller state in observation if specified.
         if self.control_obs:
